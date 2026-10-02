@@ -1,50 +1,114 @@
 import streamlit as st
 from groq import Groq
 from PIL import Image
-import os
+import base64
+import io
 
 # Page Configuration
-st.set_page_config(page_title="SafeBite - Cloud Allergy Guard", page_icon="🛡️", layout="centered")
-
-st.title("🛡️ SafeBite: Cloud Allergy Guard")
-st.markdown("An open-source AI assistant deployed in the cloud to check food labels anywhere.")
-
-# Sidebar for Groq API Key & Profile
-st.sidebar.header("⚙️ Configuration")
-api_key = st.sidebar.text_input("Enter Groq API Key:", type="password")
-st.sidebar.markdown("[Get a free Groq API key here](https://console.groq.com)")
-
-preset = st.sidebar.selectbox(
-    "Choose a Preset Profile:",
-    ["Custom", "Severe Nut & Gluten Allergy", "Lactose Intolerant & Vegan"]
+st.set_page_config(
+    page_title="SafeBite - Cloud Allergy Guard", 
+    page_icon="🛡️", 
+    layout="centered",
+    initial_sidebar_state="expanded"
 )
 
-default_allergies = "Peanuts\nGluten\nLactose\nShellfish"
-if preset == "Severe Nut & Gluten Allergy":
-    default_allergies = "Peanuts\nTree Nuts\nGluten\nWheat"
-elif preset == "Lactose Intolerant & Vegan":
-    default_allergies = "Milk\nLactose\nWhey\nEggs\nHoney\nGelatin"
+# Initialize Session State for History
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-allergies = st.sidebar.text_area("Restrictions (one per line):", default_allergies)
+# Custom CSS for polished UI
+st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        margin-bottom: 0px;
+    }
+    .sub-text {
+        color: #4B5563;
+        font-size: 1.05rem;
+        margin-bottom: 25px;
+    }
+    .stButton button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Main Section: Image Upload
-st.subheader("📸 Scan Ingredient List or Menu")
-uploaded_file = st.file_uploader("Upload an image of the ingredient label", type=["jpg", "jpeg", "png", "webp"])
+# App Header
+st.markdown('<p class="main-header">🛡️ SafeBite</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-text">Your intelligent, cloud-powered companion for instant food allergy checks.</p>', unsafe_allow_html=True)
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Product Label", use_container_width=True)
+# Sidebar Configuration
+with st.sidebar:
+    st.markdown("### 🛡️")
+    st.header("Settings & Profile")
     
-    if st.button("Check Safety 🔍", type="primary"):
+    with st.expander("🔑 Groq API Key Setup", expanded=True):
+        api_key = st.text_input("Enter Key:", type="password", help="Your Groq API key is kept secure in your session.")
+        st.markdown("[Get a free key here ↗](https://console.groq.com)")
+    
+    st.divider()
+    
+    st.subheader("Dietary Profiles")
+    preset = st.selectbox(
+        "Choose a Preset Profile:",
+        ["Custom", "Severe Nut & Gluten Allergy", "Lactose Intolerant & Vegan"]
+    )
+
+    default_allergies = "Peanuts\nGluten\nLactose\nShellfish"
+    if preset == "Severe Nut & Gluten Allergy":
+        default_allergies = "Peanuts\nTree Nuts\nGluten\nWheat"
+    elif preset == "Lactose Intolerant & Vegan":
+        default_allergies = "Milk\nLactose\nWhey\nEggs\nHoney\nGelatin"
+
+    allergies = st.text_area("Active Restrictions (one per line):", default_allergies, height=120)
+    
+    # Scan History Sidebar Section
+    if st.session_state.history:
+        st.divider()
+        st.subheader("📜 Recent Scans")
+        for idx, item in enumerate(st.session_state.history[-3:]): 
+            st.text(f"{idx+1}. {item}")
+
+# Main Section: Choose input method (Upload vs. Camera)
+with st.container(border=True):
+    st.subheader("📸 Scan Product Label or Menu")
+    input_method = st.radio("Choose input mode:", ["Upload Image File", "Take Photo with Camera"], horizontal=True)
+
+    image = None
+    if input_method == "Upload Image File":
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png", "webp"])
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+    else:
+        camera_file = st.camera_input("Take a picture of the label")
+        if camera_file is not None:
+            image = Image.open(camera_file)
+
+if image is not None:
+    col1, col2 = st.columns([1, 1], gap="medium")
+    
+    with col1:
+        with st.container(border=True):
+            st.image(image, caption="Captured/Uploaded Label", use_container_width=True)
+            
+    with col2:
+        with st.container(border=True):
+            st.markdown("### Ready to Analyze")
+            st.markdown("Click below to check ingredients against your restrictions using cloud vision AI.")
+            analyze_btn = st.button("Check Safety 🔍", type="primary")
+
+    if analyze_btn:
         if not api_key:
-            st.error("Please enter your Groq API Key in the sidebar.")
+            st.error("⚠️ Please enter your Groq API Key in the sidebar expander first.")
         else:
-            with st.spinner("Analyzing ingredients via open-source cloud AI..."):
+            with st.spinner("Analyzing ingredients with cloud AI..."):
                 try:
-                    import base64
-                    import io
-                    
-                    # Convert image to base64 for Groq API
+                    # Convert image to base64
                     buffered = io.BytesIO()
                     image.save(buffered, format="JPEG")
                     img_str = base64.b64encode(buffered.getvalue()).decode()
@@ -81,11 +145,19 @@ if uploaded_file is not None:
                     
                     verdict_text = completion.choices[0].message.content
                     
+                    # Add to session history log
+                    status_label = "🔴 DANGER" if "DANGER" in verdict_text.upper() else "🟢 SAFE"
+                    st.session_state.history.append(status_label)
+                    
+                    # Styled Verdict Display Card
+                    st.markdown("---")
                     st.subheader("📋 Safety Verdict")
-                    if "DANGER" in verdict_text.upper():
-                        st.error(verdict_text)
-                    else:
-                        st.success(verdict_text)
-                        
+                    
+                    with st.container(border=True):
+                        if "DANGER" in verdict_text.upper():
+                            st.error(verdict_text)
+                        else:
+                            st.success(verdict_text)
+                            
                 except Exception as e:
                     st.error(f"Error processing image: {e}")
